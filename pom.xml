@@ -10,16 +10,16 @@
 
     <groupId>solutions.canarin</groupId>
     <artifactId>cream-soda</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.0.0</version>
 
     <description>A simple dependency injection engine based on Feather</description>
     <name>CREAM SODA</name>
-    <!--    <url>https://pdfsam.org</url>-->
 
-    <!--    <organization>-->
-    <!--        <name>Sober Lemur S.a.s. di Vacondio Andrea</name>-->
-    <!--        <url>https://pdfsam.org</url>-->
-    <!--    </organization>-->
+    <organization>
+        <name>Canarin Solutions by Jakša Tomović</name>
+        <url>https://solutions.canarin</url>
+    </organization>
+
     <licenses>
         <license>
             <name>Apache License, Version 2.0</name>
@@ -37,6 +37,14 @@
         </developer>
     </developers>
 
+    <distributionManagement>
+        <repository>
+            <id>repsy</id>
+            <name>repsy-artifactory-release</name>
+            <url>https://repo.repsy.io/mvn/canarin/cream-soda</url>
+        </repository>
+    </distributionManagement>
+
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.javadoc.failOnError>false</maven.javadoc.failOnError>
@@ -53,7 +61,7 @@
             <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
-                <version>1.7.30</version>
+                <version>1.7.36</version>
             </dependency>
             <dependency>
                 <groupId>ch.qos.logback</groupId>
@@ -91,10 +99,33 @@
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.2.0</version>
+                <executions>
+                    <execution>
+                        <id>copy-dependencies</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/libs</outputDirectory>
+                            <overWriteReleases>false</overWriteReleases>
+                            <overWriteSnapshots>false</overWriteSnapshots>
+                            <overWriteIfNewer>true</overWriteIfNewer>
+                            <includeScope>compile</includeScope>
+                            <includeScope>runtime</includeScope>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.8.1</version>
+                <version>3.10.1</version>
                 <configuration>
-                    <release>11</release>
+                    <source>18</source>
+                    <target>18</target>
                 </configuration>
             </plugin>
             <plugin>
@@ -104,8 +135,8 @@
                 <configuration>
                     <archive>
                         <manifestEntries>
-                            <!--                            <Built-By>Sober Lemur S.a.s.</Built-By>-->
-                            <!--                            <Automatic-Module-Name>org.pdfsam.injector</Automatic-Module-Name>-->
+                            <Built-By>Jakša Tomović</Built-By>
+                            <Automatic-Module-Name>solutions.canarin.cream.soda</Automatic-Module-Name>
                         </manifestEntries>
                     </archive>
                 </configuration>

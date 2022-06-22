@@ -1,49 +1,114 @@
 package solutions.canarin.cream.soda.core;
 
-import javax.inject.Inject;
-import javax.inject.Provider;
-import javax.inject.Qualifier;
-import javax.inject.Singleton;
+import jakarta.inject.Inject;
+import jakarta.inject.Provider;
+import jakarta.inject.Qualifier;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.Closeable;
 import java.lang.annotation.Annotation;
-import java.lang.reflect.*;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
-public class CreamSoda {
-    private final Map<Key, Provider<?>> providers = new ConcurrentHashMap<>();
-    private final Map<Key, Object> singletons = new ConcurrentHashMap<>();
-    private final Map<Class, Object[][]> injectFields = new ConcurrentHashMap<>(0);
+import static java.util.Collections.singleton;
+import static java.util.Objects.isNull;
+import static java.util.Objects.nonNull;
+import static java.util.Optional.ofNullable;
+import static java.util.stream.Collectors.joining;
+import static java.util.stream.Stream.concat;
+import static java.util.stream.Stream.of;
 
-    /**
-     * Constructs CreamSoda with configuration modules
-     */
-    public static CreamSoda with(Object... modules) {
-        return new CreamSoda(Arrays.asList(modules));
+public class CreamSoda implements Closeable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(CreamSoda.class);
+
+    private static final Queue<Object> CONFIGURATIONS = new ConcurrentLinkedQueue<>();
+    private static final Map<Class<?>, Class<?>> COMPONENTS = new ConcurrentHashMap<>();
+
+    private final Map<Key<?>, Provider<?>> providers = new ConcurrentHashMap<>();
+    private final Map<Key<?>, Object> singletons = new ConcurrentHashMap<>();
+    private final Set<Key<?>> autos = new HashSet<>();
+
+    public static void addConfig(Object... configurations) {
+        CONFIGURATIONS.addAll(Arrays.asList(configurations));
     }
 
-    /**
-     * Constructs CreamSoda with configuration modules
-     */
-    public static CreamSoda with(Iterable<?> modules) {
-        return new CreamSoda(modules);
-    }
-
-    private CreamSoda(Iterable<?> modules) {
-        providers.put(Key.of(CreamSoda.class), new Provider() {
-                    @Override
-                    public Object get() {
-                        return this;
-                    }
-                }
-        );
-        for (final Object module : modules) {
-            if (module instanceof Class) {
-                throw new CreamSodaException(String.format("%s provided as class instead of an instance.", ((Class) module).getName()));
-            }
-            for (Method providerMethod : providers(module.getClass())) {
-                providerMethod(module, providerMethod);
-            }
+    public static void addConfig(Iterable<Object> configurations) {
+        for (Object config : configurations) {
+            CONFIGURATIONS.add(config);
         }
+    }
+
+    /**
+     * Adds the given components classes to the injectable ones
+     *
+     * @param components
+     */
+    public static void add(Class<?>... components) {
+        Arrays.stream(components).forEach(c -> COMPONENTS.put(c, c));
+    }
+
+    /**
+     * @return the context started with the given additional configurations
+     */
+    public static CreamSoda start(Object... configurations) {
+        CreamSoda.addConfig(configurations);
+        return CreamSoda.start();
+    }
+
+    /**
+     * @return the context started with the given additional configurations
+     */
+    public static CreamSoda start(Iterable<Object> configurations) {
+        CreamSoda.addConfig(configurations);
+        return CreamSoda.start();
+    }
+
+    /**
+     * @return the context started with the previously provided configuration
+     */
+    public static CreamSoda start() {
+        LOG.debug("Starting injector with {} configuration modules", CONFIGURATIONS.size());
+        return new CreamSoda();
+    }
+
+    @Override
+    public void close() {
+        LOG.debug("Closing injector");
+        this.providers.clear();
+        this.singletons.clear();
+    }
+
+    private CreamSoda() {
+        providers.put(Key.of(CreamSoda.class), () -> this);
+        try {
+            for (final Object config : CONFIGURATIONS) {
+                if (config instanceof Class) {
+                    throw new CreamSodaException(String.format("%s provided as class instead of an instance.",
+                            ((Class<?>) config).getName()));
+                }
+                for (Method providerMethod : providers(config.getClass())) {
+                    providerMethod(config, providerMethod);
+                }
+                ofNullable(config.getClass().getAnnotation(Component.class)).map(c -> c.value())
+                        .filter(Objects::nonNull).ifPresent(CreamSoda::add);
+            }
+            LOG.debug("Parsing {} components", COMPONENTS.size());
+            COMPONENTS.keySet().forEach(this::provider);
+            LOG.trace("Parsed components classes");
+        } finally {
+            CONFIGURATIONS.clear();
+            COMPONENTS.clear();
+        }
+        LOG.debug("Autowired creating {} singletons", autos.size());
+        autos.forEach(k -> providers.get(k).get());
+        autos.clear();
     }
 
     /**
@@ -61,6 +126,14 @@ public class CreamSoda {
     }
 
     /**
+     * @return an instance of type
+     */
+    @SuppressWarnings("unchecked")
+    public <T> List<T> instancesOfType(Class<T> type) {
+        return (List<T>) listProvider(Key.of(type)).get();
+    }
+
+    /**
      * @return provider of type
      */
     public <T> Provider<T> provider(Class<T> type) {
@@ -74,76 +147,59 @@ public class CreamSoda {
         return provider(key, null);
     }
 
-    /**
-     * Injects fields to the target object
-     */
-    public void injectFields(Object target) {
-        if (!injectFields.containsKey(target.getClass())) {
-            injectFields.put(target.getClass(), injectFields(target.getClass()));
-        }
-        for (Object[] f : injectFields.get(target.getClass())) {
-            Field field = (Field) f[0];
-            Key key = (Key) f[2];
-            try {
-                field.set(target, (boolean) f[1] ? provider(key) : instance(key));
-            } catch (Exception e) {
-                throw new CreamSodaException(String.format("Can't inject field %s in %s", field.getName(), target.getClass().getName()));
-            }
-        }
-    }
-
     @SuppressWarnings("unchecked")
-    private <T> Provider<T> provider(final Key<T> key, Set<Key> chain) {
+    private <T> Provider<T> provider(final Key<T> key, Set<Key<?>> chain) {
         if (!providers.containsKey(key)) {
-            final Constructor constructor = constructor(key);
-            final Provider<?>[] paramProviders = paramProviders(key, constructor.getParameterTypes(), constructor.getGenericParameterTypes(), constructor.getParameterAnnotations(), chain);
-            providers.put(key, singletonProvider(key, key.type.getAnnotation(Singleton.class), new Provider() {
-                        @Override
-                        public Object get() {
-                            try {
-                                return constructor.newInstance(params(paramProviders));
-                            } catch (Exception e) {
-                                throw new CreamSodaException(String.format("Can't instantiate %s", key.toString()), e);
-                            }
+            if (nonNull(key.qualifier)) {
+                throw new CreamSodaException("Unable to find provider for " + key);
+            }
+            final Constructor<?> constructor = constructor(key);
+            final Provider<?>[] paramProviders = paramProviders(key, constructor.getParameterTypes(),
+                    constructor.getGenericParameterTypes(), constructor.getParameterAnnotations(), chain);
+            providers.put(key, singletonProvider(key,
+                    !key.type.isAnnotationPresent(Prototype.class) || key.type.isAnnotationPresent(Autowired.class), () -> {
+                        try {
+                            return constructor.newInstance(params(paramProviders));
+                        } catch (Exception e) {
+                            throw new CreamSodaException(String.format("Can't instantiate %s", key.toString()), e);
                         }
-                    })
-            );
+                    }));
+            if (key.type.isAnnotationPresent(Autowired.class)) {
+                LOG.trace("To be autocreated {}", key);
+                autos.add(key);
+            }
         }
         return (Provider<T>) providers.get(key);
     }
 
     private void providerMethod(final Object module, final Method m) {
-        final Key key = Key.of(m.getReturnType(), qualifier(m.getAnnotations()));
+        final Key<?> key = Key.of(m.getReturnType(), qualifier(m.getAnnotations()));
         if (providers.containsKey(key)) {
-            throw new CreamSodaException(String.format("%s has multiple providers, module %s", key.toString(), module.getClass()));
+            throw new CreamSodaException(
+                    String.format("%s has multiple providers, configuration %s", key.toString(), module.getClass()));
         }
-        Singleton singleton = m.getAnnotation(Singleton.class) != null ? m.getAnnotation(Singleton.class) : m.getReturnType().getAnnotation(Singleton.class);
-        final Provider<?>[] paramProviders = paramProviders(
-                key,
-                m.getParameterTypes(),
-                m.getGenericParameterTypes(),
-                m.getParameterAnnotations(),
-                Collections.singleton(key)
-        );
-        providers.put(key, singletonProvider(key, singleton, new Provider() {
-                            @Override
-                            public Object get() {
-                                try {
-                                    return m.invoke(module, params(paramProviders));
-                                } catch (Exception e) {
-                                    throw new CreamSodaException(String.format("Can't instantiate %s with provider", key.toString()), e);
-                                }
-                            }
-                        }
-                )
-        );
+        boolean singleton = !(m.isAnnotationPresent(Prototype.class)
+                || m.getReturnType().isAnnotationPresent(Prototype.class))
+                || (m.isAnnotationPresent(Autowired.class) || m.getReturnType().isAnnotationPresent(Autowired.class));
+        final Provider<?>[] paramProviders = paramProviders(key, m.getParameterTypes(), m.getGenericParameterTypes(),
+                m.getParameterAnnotations(), Collections.singleton(key));
+        providers.put(key, singletonProvider(key, singleton, () -> {
+            try {
+                return m.invoke(module, params(paramProviders));
+            } catch (Exception e) {
+                throw new CreamSodaException(String.format("Can't instantiate %s with provider", key.toString()), e);
+            }
+        }));
+        if (m.isAnnotationPresent(Autowired.class) || m.getReturnType().isAnnotationPresent(Autowired.class)) {
+            LOG.trace("To be autocreated {}", key);
+            autos.add(key);
+        }
     }
 
     @SuppressWarnings("unchecked")
-    private <T> Provider<T> singletonProvider(final Key key, Singleton singleton, final Provider<T> provider) {
-        return singleton != null ? new Provider<T>() {
-            @Override
-            public T get() {
+    private <T> Provider<T> singletonProvider(final Key<?> key, boolean singleton, final Provider<T> provider) {
+        if (singleton) {
+            return () -> {
                 if (!singletons.containsKey(key)) {
                     synchronized (singletons) {
                         if (!singletons.containsKey(key)) {
@@ -152,47 +208,58 @@ public class CreamSoda {
                     }
                 }
                 return (T) singletons.get(key);
-            }
-        } : provider;
+            };
+        }
+        return provider;
     }
 
-    private Provider<?>[] paramProviders(
-            final Key key,
-            Class<?>[] parameterClasses,
-            Type[] parameterTypes,
-            Annotation[][] annotations,
-            final Set<Key> chain
-    ) {
-        Provider<?>[] providers = new Provider<?>[parameterTypes.length];
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Provider<List<?>> listProvider(final Key<?> key) {
+        return () -> {
+            List items = new ArrayList<>();
+            providers.keySet().stream().filter(k -> key.type.isAssignableFrom(k.type)).map(providers::get)
+                    .map(Provider::get).forEach(items::add);
+            return items;
+        };
+
+    }
+
+    private Provider<?>[] paramProviders(final Key<?> key, Class<?>[] parameterClasses, Type[] parameterTypes,
+                                         Annotation[][] annotations, final Set<Key<?>> chain) {
+        Provider<?>[] providerArray = new Provider<?>[parameterTypes.length];
         for (int i = 0; i < parameterTypes.length; ++i) {
             Class<?> parameterClass = parameterClasses[i];
             Annotation qualifier = qualifier(annotations[i]);
-            Class<?> providerType = Provider.class.equals(parameterClass) ?
-                    (Class<?>) ((ParameterizedType) parameterTypes[i]).getActualTypeArguments()[0] :
-                    null;
-            if (providerType == null) {
-                final Key newKey = Key.of(parameterClass, qualifier);
-                final Set<Key> newChain = append(chain, key);
+            Optional<Class<?>> parametrizedType = Optional.empty();
+            if (Provider.class.equals(parameterClass) || List.class.equals(parameterClass)) {
+                Type type = ((ParameterizedType) parameterTypes[i]).getActualTypeArguments()[0];
+                if (!(type instanceof Class)) {
+                    throw new CreamSodaException("Unable to inject parameterized type \"" + type.toString() + "\"");
+                }
+                parametrizedType = Optional.of((Class<?>) type);
+            }
+
+            // we handle special cases of a Provider and unqualified List
+            if (parametrizedType.isPresent() && (Provider.class.equals(parameterClass)
+                    || (List.class.equals(parameterClass) && isNull(qualifier)))) {
+                final Key<?> newKey = Key.of(parametrizedType.get(), qualifier);
+                if (Provider.class.equals(parameterClass)) {
+                    providerArray[i] = () -> provider(newKey, null);
+                }
+                if (List.class.equals(parameterClass)) {
+                    providerArray[i] = listProvider(newKey);
+                }
+            } else {
+                final Key<?> newKey = Key.of(parameterClass, qualifier);
+                final Set<Key<?>> newChain = append(chain, key);
                 if (newChain.contains(newKey)) {
                     throw new CreamSodaException(String.format("Circular dependency: %s", chain(newChain, newKey)));
                 }
-                providers[i] = new Provider() {
-                    @Override
-                    public Object get() {
-                        return provider(newKey, newChain).get();
-                    }
-                };
-            } else {
-                final Key newKey = Key.of(providerType, qualifier);
-                providers[i] = new Provider() {
-                    @Override
-                    public Object get() {
-                        return provider(newKey, null);
-                    }
-                };
+                providerArray[i] = () -> provider(newKey, newChain).get();
             }
+
         }
-        return providers;
+        return providerArray;
     }
 
     private static Object[] params(Provider<?>[] paramProviders) {
@@ -203,60 +270,23 @@ public class CreamSoda {
         return params;
     }
 
-    private static Set<Key> append(Set<Key> set, Key newKey) {
+    private static Set<Key<?>> append(Set<Key<?>> set, Key<?> newKey) {
         if (set != null && !set.isEmpty()) {
-            Set<Key> appended = new LinkedHashSet<>(set);
+            Set<Key<?>> appended = new LinkedHashSet<>(set);
             appended.add(newKey);
             return appended;
-        } else {
-            return Collections.singleton(newKey);
         }
+        return singleton(newKey);
     }
 
-    private static Object[][] injectFields(Class<?> target) {
-        Set<Field> fields = fields(target);
-        Object[][] fs = new Object[fields.size()][];
-        int i = 0;
-        for (Field f : fields) {
-            Class<?> providerType = f.getType().equals(Provider.class) ?
-                    (Class<?>) ((ParameterizedType) f.getGenericType()).getActualTypeArguments()[0] :
-                    null;
-            fs[i++] = new Object[]{
-                    f,
-                    providerType != null,
-                    Key.of(providerType != null ? providerType : f.getType(), qualifier(f.getAnnotations()))
-            };
-        }
-        return fs;
+    private static String chain(Set<Key<?>> chain, Key<?> lastKey) {
+        return concat(chain.stream().map(Key::toString), of(lastKey.toString())).collect(joining(" -> "));
     }
 
-    private static Set<Field> fields(Class<?> type) {
-        Class<?> current = type;
-        Set<Field> fields = new HashSet<>();
-        while (!current.equals(Object.class)) {
-            for (Field field : current.getDeclaredFields()) {
-                if (field.isAnnotationPresent(Inject.class)) {
-                    field.setAccessible(true);
-                    fields.add(field);
-                }
-            }
-            current = current.getSuperclass();
-        }
-        return fields;
-    }
-
-    private static String chain(Set<Key> chain, Key lastKey) {
-        StringBuilder chainString = new StringBuilder();
-        for (Key key : chain) {
-            chainString.append(key.toString()).append(" -> ");
-        }
-        return chainString.append(lastKey.toString()).toString();
-    }
-
-    private static Constructor constructor(Key key) {
-        Constructor inject = null;
-        Constructor noarg = null;
-        for (Constructor c : key.type.getDeclaredConstructors()) {
+    private static Constructor<?> constructor(Key<?> key) {
+        Constructor<?> inject = null;
+        Constructor<?> noarg = null;
+        for (Constructor<?> c : key.type.getDeclaredConstructors()) {
             if (c.isAnnotationPresent(Inject.class)) {
                 if (inject == null) {
                     inject = c;
@@ -267,13 +297,14 @@ public class CreamSoda {
                 noarg = c;
             }
         }
-        Constructor constructor = inject != null ? inject : noarg;
+        Constructor<?> constructor = inject != null ? inject : noarg;
         if (constructor != null) {
             constructor.setAccessible(true);
             return constructor;
-        } else {
-            throw new CreamSodaException(String.format("%s doesn't have an @Inject or no-arg constructor, or a module provider", key.type.getName()));
         }
+        throw new CreamSodaException(String.format(
+                "%s doesn't have an @Inject or no-arg constructor, or a configured provider", key.type.getName()));
+
     }
 
     private static Set<Method> providers(Class<?> type) {
@@ -281,7 +312,8 @@ public class CreamSoda {
         Set<Method> providers = new HashSet<>();
         while (!current.equals(Object.class)) {
             for (Method method : current.getDeclaredMethods()) {
-                if (method.isAnnotationPresent(Provides.class) && (type.equals(current) || !providerInSubClass(method, providers))) {
+                if (method.isAnnotationPresent(Provides.class)
+                        && (type.equals(current) || !providerInSubClass(method, providers))) {
                     method.setAccessible(true);
                     providers.add(method);
                 }
@@ -302,7 +334,8 @@ public class CreamSoda {
 
     private static boolean providerInSubClass(Method method, Set<Method> discoveredMethods) {
         for (Method discovered : discoveredMethods) {
-            if (discovered.getName().equals(method.getName()) && Arrays.equals(method.getParameterTypes(), discovered.getParameterTypes())) {
+            if (discovered.getName().equals(method.getName())
+                    && Arrays.equals(method.getParameterTypes(), discovered.getParameterTypes())) {
                 return true;
             }
         }
