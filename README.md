@@ -1,6 +1,9 @@
 # Cream Soda
 Lightweight dependency injection for Java (JSR-330). 
 
+[//]: # (![Build Status]&#40;https://github.com/torakiki/pdfsam-injector/actions/workflows/build.yml/badge.svg&#41;)
+[![License](http://img.shields.io/badge/license-APLv2-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0.html)
+
 #### About Cream Soda
 [Cream Soda](http://zsoltherpai.github.io/feather) is an ultra-lightweight dependency injection ([JSR-330](https://jcp.org/en/jsr/detail?id=330 "JSR-330"))
 library for Java. Dependency injection frameworks are often perceived as "magical" and complex. 
