@@ -1,6 +1,7 @@
 package solutions.canarin.cream.soda.core;
 
-import javax.inject.Named;
+import jakarta.inject.Named;
+
 import java.lang.annotation.Annotation;
 
 public class Key<T> {
@@ -38,22 +39,25 @@ public class Key<T> {
     static <T> Key<T> of(Class<T> type, Annotation qualifier) {
         if (qualifier == null) {
             return Key.of(type);
-        } else {
-            return qualifier.annotationType().equals(Named.class) ?
-                    Key.of(type, ((Named) qualifier).value()) :
-                    Key.of(type, qualifier.annotationType());
         }
+        return qualifier.annotationType().equals(Named.class) ? Key.of(type, ((Named) qualifier).value())
+                : Key.of(type, qualifier.annotationType());
+
     }
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
 
         Key<?> key = (Key<?>) o;
 
-        if (!type.equals(key.type)) return false;
-        if (qualifier != null ? !qualifier.equals(key.qualifier) : key.qualifier != null) return false;
+        if (!type.equals(key.type))
+            return false;
+        if (qualifier != null ? !qualifier.equals(key.qualifier) : key.qualifier != null)
+            return false;
         return !(name != null ? !name.equals(key.name) : key.name != null);
 
     }
@@ -71,6 +75,4 @@ public class Key<T> {
         String suffix = name != null ? "@\"" + name + "\"" : qualifier != null ? "@" + qualifier.getSimpleName() : "";
         return type.getName() + suffix;
     }
-
-
 }
