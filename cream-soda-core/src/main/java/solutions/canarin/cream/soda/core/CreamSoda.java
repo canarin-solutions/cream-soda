@@ -96,7 +96,7 @@ public class CreamSoda implements Closeable {
                 for (Method providerMethod : providers(config.getClass())) {
                     providerMethod(config, providerMethod);
                 }
-                ofNullable(config.getClass().getAnnotation(Component.class)).map(c -> c.value())
+                ofNullable(config.getClass().getAnnotation(Components.class)).map(c -> c.value())
                         .filter(Objects::nonNull).ifPresent(CreamSoda::add);
             }
             LOG.debug("Parsing {} components", COMPONENTS.size());
@@ -157,14 +157,14 @@ public class CreamSoda implements Closeable {
             final Provider<?>[] paramProviders = paramProviders(key, constructor.getParameterTypes(),
                     constructor.getGenericParameterTypes(), constructor.getParameterAnnotations(), chain);
             providers.put(key, singletonProvider(key,
-                    !key.type.isAnnotationPresent(Prototype.class) || key.type.isAnnotationPresent(Autowired.class), () -> {
+                    !key.type.isAnnotationPresent(Prototype.class) || key.type.isAnnotationPresent(Auto.class), () -> {
                         try {
                             return constructor.newInstance(params(paramProviders));
                         } catch (Exception e) {
                             throw new CreamSodaException(String.format("Can't instantiate %s", key.toString()), e);
                         }
                     }));
-            if (key.type.isAnnotationPresent(Autowired.class)) {
+            if (key.type.isAnnotationPresent(Auto.class)) {
                 LOG.trace("To be autocreated {}", key);
                 autos.add(key);
             }
@@ -180,7 +180,7 @@ public class CreamSoda implements Closeable {
         }
         boolean singleton = !(m.isAnnotationPresent(Prototype.class)
                 || m.getReturnType().isAnnotationPresent(Prototype.class))
-                || (m.isAnnotationPresent(Autowired.class) || m.getReturnType().isAnnotationPresent(Autowired.class));
+                || (m.isAnnotationPresent(Auto.class) || m.getReturnType().isAnnotationPresent(Auto.class));
         final Provider<?>[] paramProviders = paramProviders(key, m.getParameterTypes(), m.getGenericParameterTypes(),
                 m.getParameterAnnotations(), Collections.singleton(key));
         providers.put(key, singletonProvider(key, singleton, () -> {
@@ -190,7 +190,7 @@ public class CreamSoda implements Closeable {
                 throw new CreamSodaException(String.format("Can't instantiate %s with provider", key.toString()), e);
             }
         }));
-        if (m.isAnnotationPresent(Autowired.class) || m.getReturnType().isAnnotationPresent(Autowired.class)) {
+        if (m.isAnnotationPresent(Auto.class) || m.getReturnType().isAnnotationPresent(Auto.class)) {
             LOG.trace("To be autocreated {}", key);
             autos.add(key);
         }

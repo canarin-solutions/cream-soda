@@ -38,12 +38,12 @@ class AutoProviderTest {
         }
     }
 
-    @Component({AnnotatedClass.class})
+    @Components({AnnotatedClass.class})
     class ConfigComponent {
 
     }
 
-    @Autowired
+    @Auto
     public static class AnnotatedClass {
         AnnotatedClass() {
             HIT.accept("hit");
