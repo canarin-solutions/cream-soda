@@ -1,7 +1,6 @@
 # Cream Soda
-Lightweight dependency injection for Java (JSR-330). 
+Lightweight dependency injection for Java. 
 
-[//]: # (![Build Status]&#40;https://github.com/torakiki/pdfsam-injector/actions/workflows/build.yml/badge.svg&#41;)
 [![License](http://img.shields.io/badge/license-APLv2-blue.svg)](http://www.apache.org/licenses/LICENSE-2.0.html)
 
 #### About Cream Soda
